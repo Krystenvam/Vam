@@ -1,0 +1,176 @@
+// UI progress bar script (VAMMoan arousal).
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+// Imports.
+import { scripter, scene } from "vam-scripter";
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+// Config enums.
+const CONFIG = {
+  // Atom related.
+  ATOM: {
+    // Id of the Person atom with the VAMMoan plugin instance.
+    PERSON_ID: 	  	 "Person - Female 01",
+    // Id of the UIText atom to show the VAMMoan arousal percent.
+    AROUSAL_PERCENT_ID:  "Readout - VAMMoan",
+    // Id of the UIText atom to show the VAMMoan arousal progress bar.
+    AROUSAL_BAR_ID: 	 "Readout - VAMMoan Arousal Bar"
+  },
+  // VAMMoan related.
+  VM: {
+    // Action names for trigger actions (that can be targeted/wired via the VAMMoan plugin -> triggers UI) for when orgasm state starts/stops.
+    ORGASM_STATE_START_ACTION: "orgasmStateStart",
+    ORGASM_STATE_STOP_ACTION:  "orgasmStateStop"
+  },
+  // UI related.
+  UI: {
+    PERCENT_BAR: {
+      // VAM restricts us from setting the canvas Y value to < 100. We need to account for this.
+      OFFSET: 100,
+      // Canvas Y value when at 0%.
+      MIN_CANVAS_Y: 100,
+      // Canvas Y value when at 100%.
+      MAX_CANVAS_Y: 1303
+    }
+  },
+  // Tick (run-loop) related.
+  TICK: {
+    // Every half second.
+    INTERVAL: 0.5 * 1000
+  }
+};
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+// VAMMoan related.
+let orgasmState = false;
+let triggeredOrgasmState = false;
+
+// Declare trigger actions (that can be targeted/wired via the VAMMoan plugin -> triggers UI) for when orgasm state starts/stops.
+scripter.declareAction(CONFIG.VM.ORGASM_STATE_START_ACTION, () => {
+  // We check for this flag becuase VAMMoan has a bug(?) which seems to call the orgasm start trigger twice.
+  if(!triggeredOrgasmState) {
+     // Update our flags.     
+     orgasmState = true;
+     triggeredOrgasmState = true;
+  }
+});
+scripter.declareAction(CONFIG.VM.ORGASM_STATE_STOP_ACTION, () => {
+  // Reset our flags.  
+  orgasmState = false;
+  triggeredOrgasmState = false;
+});
+
+// Get a reference to the person atom containing the VAMMoan instance.
+const person = scene.getAtom(CONFIG.ATOM.PERSON_ID);
+
+// Get all storables on this person atom.
+const personItems = person.getStorableIds();
+
+// Hold the storable key that matches the VAMMoan plugin.
+let vamMoanKey;
+for (let i = 0; i < personItems.length; i++) {
+    if(personItems[i].startsWith("plugin") && personItems[i].contains("VAMMoan")){
+        vamMoanKey = personItems[i];
+    }
+}
+
+// Get a reference to the VAMMoan storable.
+const vamMoan = person.getStorable(vamMoanKey);
+
+// Function to query the current VAMMoan storables and return an object containing
+// those values (and some additional calculated values).
+function getVAMMoanState() {
+  // Get a reference to all the individual params we need from the VAMMoan plugin state >
+
+  // The current intensity level.
+  const intensityLevel = vamMoan.getFloatParam("VAMM CurrentArousal").val;
+
+  // The current arousal value.
+  const currentArousal = vamMoan.getFloatParam("VAMM TriggerCount").val;
+
+  // The maximum arousal value before orgasm state is triggered.
+  const maxArousal = vamMoan.getFloatParam("VAMM MaxTriggerCount").val; 
+
+  // Calculate arousal as a percentage.
+  let arousalPercentage = Math.ceil((currentArousal/maxArousal)*100);
+
+  // Override certain values if in orgasm state.
+  if(orgasmState) {
+    // VAMMoan resets its internal arousal value to zero as soon as it enters "orgasm" state, so let's override that
+    // behaviour here so that our UI elements continue to read 100% arousal until orgasm state is over. 
+    arousalPercentage = 100;
+  }
+
+  // Return object. 
+  return {      
+      currentArousal:         currentArousal,
+      maxArousal:              maxArousal,
+      arousalPercentage: arousalPercentage,
+      intensityLevel:           intensityLevel
+  };
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+// UI percentage text.
+
+// Get a reference to the atom (UIText) instance we want to use.
+const percentageText = scene.getAtom(CONFIG.ATOM.AROUSAL_PERCENT_ID);
+
+// Get a reference to the "Text" storable.
+const percentageTextText = percentageText.getStorable("Text");
+
+// Get a reference to the "text" string param.
+const percentageTextTextParam = percentageTextText.getStringParam("text");
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+// UI percentage bar.
+
+// Get atom (UIText) instance we want to use.
+const percentageBar = scene.getAtom(CONFIG.ATOM.AROUSAL_BAR_ID);
+
+// Get a reference to the "Canvas" storable.
+const percentageBarCanvas = percentageBar.getStorable("Canvas");
+
+// Get a reference to the "ySize" string param.
+const percentageBarYSizeParam = percentageBarCanvas.getFloatParam("ySize");
+
+// Calculate percentage bar range.
+const percentageBarRange = CONFIG.UI.PERCENT_BAR.MAX_CANVAS_Y - CONFIG.UI.PERCENT_BAR.MIN_CANVAS_Y;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+// Tick (run loop).
+// Note - Scripter provides an "onUpdate" function that is called on every frame (eg at 60fps this is called 60 times a second).
+// That is complete overkill for this type of functionality (as we are just updating a UI readout).
+// Instead, let's just create a custom tick timeout that runs at [x] interval.
+let tickTimeout = null;
+
+// Can be set to true at any point to end tick loop.
+let endTick = false;
+
+// Logic to run with every tick.
+function tick() {
+  // Run function to query VAMMoan state.
+  const vamMoanState = getVAMMoanState();
+  
+  // Update % value.
+  percentageTextTextParam.val = vamMoanState.arousalPercentage + '%';
+
+  // Calculate current percentage bar size.
+  const percentageBarCurrentYVal = CONFIG.UI.PERCENT_BAR.OFFSET + Math.ceil((percentageBarRange / 100) * vamMoanState.arousalPercentage);
+
+  // Update percentage bar size.
+  percentageBarYSizeParam.val = percentageBarCurrentYVal;
+
+  // Set timeout to recursively call tick function.
+  if(!endTick) {
+    tickTimeout = setTimeout(tick, CONFIG.TICK.INTERVAL);
+  }
+}
+
+// Start initial tick.
+tick();
+
+
+
+
+
